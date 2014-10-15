@@ -5,6 +5,15 @@ Conversations - the very last word in instant messaging
 
 ![screenshots](https://raw.githubusercontent.com/siacs/Conversations/master/screenshots.png)
 
+## Minor Tweaks for Pebble
+
+In order to make Conversations work better with apps like Notification Center for Pebble, I have made a tiny modification to Conversations. This is a very dirty workaround - it's not at all ideal. It's not a good idea. I've added the string "IGNOREME" to every notification which arrives during the grace period when another device is active and sending messages. This allows you to use regex to filter out the "silent" notifications given by Conversations, and ignore them.
+
+Once again, just regex exclude the string "IGNOREME" (without the quotes).
+
+This is not a nice solution, it's actually about the worst possible way to do it. But I needed a dirty and quick workaround I could implement in under ten minutes, and here it is.
+
+
 ##Design principles
 * Be as beautiful and easy to use as possible without sacrificing security or
   privacy

@@ -95,7 +95,14 @@ public class NotificationService {
 							.getConversation();
 					mBuilder.setLargeIcon(conversation.getImage(
 							mXmppConnectionService, 64));
-					mBuilder.setContentTitle(conversation.getName());
+					//
+					if (!inGracePeriod()) {
+							mBuilder.setContentTitle(conversation.getName());
+					}
+					else
+					{
+							mBuilder.setContentTitle("IGNOREME " + conversation.getName());
+					}
 					StringBuilder text = new StringBuilder();
 					for (int i = 0; i < messages.size(); ++i) {
 						text.append(messages.get(i).getReadableBody(
