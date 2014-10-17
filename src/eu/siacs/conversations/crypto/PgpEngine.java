@@ -76,7 +76,8 @@ public class PgpEngine {
 					case OpenPgpApi.RESULT_CODE_ERROR:
 						OpenPgpError error = result
 								.getParcelableExtra(OpenPgpApi.RESULT_ERROR);
-						Log.d(Config.LOGTAG,"openpgp error: "+error.getMessage());
+						Log.d(Config.LOGTAG,
+								"openpgp error: " + error.getMessage());
 						callback.error(R.string.openpgp_error, message);
 						return;
 					default:
@@ -87,9 +88,9 @@ public class PgpEngine {
 		} else if (message.getType() == Message.TYPE_IMAGE) {
 			try {
 				final DownloadableFile inputFile = this.mXmppConnectionService
-						.getFileBackend().getConversationsFile(message, false);
+						.getFileBackend().getFile(message, false);
 				final DownloadableFile outputFile = this.mXmppConnectionService
-						.getFileBackend().getConversationsFile(message, true);
+						.getFileBackend().getFile(message, true);
 				outputFile.createNewFile();
 				InputStream is = new FileInputStream(inputFile);
 				OutputStream os = new FileOutputStream(outputFile);
@@ -110,7 +111,8 @@ public class PgpEngine {
 									+ ',' + imageWidth + ',' + imageHeight);
 							message.setEncryption(Message.ENCRYPTION_DECRYPTED);
 							PgpEngine.this.mXmppConnectionService
-									.updateMessage(message);;
+									.updateMessage(message);
+							;
 							callback.success(message);
 							return;
 						case OpenPgpApi.RESULT_CODE_USER_INTERACTION_REQUIRED:
@@ -196,9 +198,9 @@ public class PgpEngine {
 		} else if (message.getType() == Message.TYPE_IMAGE) {
 			try {
 				DownloadableFile inputFile = this.mXmppConnectionService
-						.getFileBackend().getConversationsFile(message, true);
+						.getFileBackend().getFile(message, true);
 				DownloadableFile outputFile = this.mXmppConnectionService
-						.getFileBackend().getConversationsFile(message, false);
+						.getFileBackend().getFile(message, false);
 				outputFile.createNewFile();
 				InputStream is = new FileInputStream(inputFile);
 				OutputStream os = new FileOutputStream(outputFile);

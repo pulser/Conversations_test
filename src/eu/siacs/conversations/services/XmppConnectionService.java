@@ -27,6 +27,7 @@ import eu.siacs.conversations.entities.Account;
 import eu.siacs.conversations.entities.Bookmark;
 import eu.siacs.conversations.entities.Contact;
 import eu.siacs.conversations.entities.Conversation;
+import eu.siacs.conversations.entities.Downloadable;
 import eu.siacs.conversations.entities.Message;
 import eu.siacs.conversations.entities.MucOptions;
 import eu.siacs.conversations.entities.MucOptions.OnRenameListener;
@@ -75,6 +76,7 @@ import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.FileObserver;
 import android.os.IBinder;
 import android.os.PowerManager;
 import android.os.PowerManager.WakeLock;
@@ -107,14 +109,15 @@ public class XmppConnectionService extends Service {
 	private CopyOnWriteArrayList<Conversation> conversations = null;
 	private JingleConnectionManager mJingleConnectionManager = new JingleConnectionManager(
 			this);
-	private HttpConnectionManager mHttpConnectionManager = new HttpConnectionManager(this);
+	private HttpConnectionManager mHttpConnectionManager = new HttpConnectionManager(
+			this);
 
 	private OnConversationUpdate mOnConversationUpdate = null;
-	private int convChangedListenerCount = 0;
+	private Integer convChangedListenerCount = 0;
 	private OnAccountUpdate mOnAccountUpdate = null;
-	private int accountChangedListenerCount = 0;
+	private Integer accountChangedListenerCount = 0;
 	private OnRosterUpdate mOnRosterUpdate = null;
-	private int rosterChangedListenerCount = 0;
+	private Integer rosterChangedListenerCount = 0;
 	public OnContactStatusChanged onContactStatusChanged = new OnContactStatusChanged() {
 
 		@Override
@@ -139,6 +142,16 @@ public class XmppConnectionService extends Service {
 					XmppConnectionService.class);
 			intent.setAction(ACTION_MERGE_PHONE_CONTACTS);
 			startService(intent);
+		}
+	};
+	
+	private FileObserver fileObserver = new FileObserver(FileBackend.getConversationsDirectory()) {
+		
+		@Override
+		public void onEvent(int event, String path) {
+			if (event == FileObserver.DELETE) {
+				markFileDeleted(path.split("\\.")[0]);
+			}
 		}
 	};
 
@@ -333,15 +346,10 @@ public class XmppConnectionService extends Service {
 			}
 		}
 		this.wakeLock.acquire();
-		ConnectivityManager cm = (ConnectivityManager) getApplicationContext()
-				.getSystemService(Context.CONNECTIVITY_SERVICE);
-		NetworkInfo activeNetwork = cm.getActiveNetworkInfo();
-		boolean isConnected = activeNetwork != null
-				&& activeNetwork.isConnected();
-
+		
 		for (Account account : accounts) {
 			if (!account.isOptionSet(Account.OPTION_DISABLED)) {
-				if (!isConnected) {
+				if (!hasInternetConnection()) {
 					account.setStatus(Account.STATUS_NO_INTERNET);
 					if (statusListener != null) {
 						statusListener.onStatusChanged(account);
@@ -399,6 +407,13 @@ public class XmppConnectionService extends Service {
 		}
 		return START_STICKY;
 	}
+	
+	public boolean hasInternetConnection() {
+		ConnectivityManager cm = (ConnectivityManager) getApplicationContext()
+				.getSystemService(Context.CONNECTIVITY_SERVICE);
+		NetworkInfo activeNetwork = cm.getActiveNetworkInfo();
+		return activeNetwork != null && activeNetwork.isConnected();
+	}
 
 	@SuppressLint("TrulyRandom")
 	@Override
@@ -422,6 +437,7 @@ public class XmppConnectionService extends Service {
 
 		getContentResolver().registerContentObserver(
 				ContactsContract.Contacts.CONTENT_URI, true, contactObserver);
+		this.fileObserver.startWatching();
 		this.pgpServiceConnection = new OpenPgpServiceConnection(
 				getApplicationContext(), "org.sufficientlysecure.keychain");
 		this.pgpServiceConnection.bindToService();
@@ -515,6 +531,7 @@ public class XmppConnectionService extends Service {
 
 	synchronized public void sendMessage(Message message) {
 		Account account = message.getConversation().getAccount();
+		account.deactivateGracePeriod();
 		Conversation conv = message.getConversation();
 		MessagePacket packet = null;
 		boolean saveInDb = true;
@@ -796,10 +813,34 @@ public class XmppConnectionService extends Service {
 				Account account = accountLookupTable.get(conv.getAccountUuid());
 				conv.setAccount(account);
 				conv.setMessages(databaseBackend.getMessages(conv, 50));
+				checkDeletedFiles(conv);
 			}
 		}
-
 		return this.conversations;
+	}
+	
+	private void checkDeletedFiles(Conversation conversation) {
+		for(Message message : conversation.getMessages()) {
+			if (message.getType() == Message.TYPE_IMAGE && message.getEncryption() != Message.ENCRYPTION_PGP) {
+				if (!getFileBackend().isFileAvailable(message)) {
+					message.setDownloadable(new DeletedDownloadable());
+				}
+			}
+		}
+	}
+	
+	private void markFileDeleted(String uuid) {
+		for(Conversation conversation : getConversations()) {
+			for(Message message : conversation.getMessages()) {
+				if (message.getType() == Message.TYPE_IMAGE && message.getEncryption() != Message.ENCRYPTION_PGP && message.getUuid().equals(uuid)) {
+					if (!getFileBackend().isFileAvailable(message)) {
+						message.setDownloadable(new DeletedDownloadable());
+						updateConversationUi();
+					}
+					return;
+				}
+			}
+		}
 	}
 
 	public void populateWithOrderedConversations(List<Conversation> list) {
@@ -976,71 +1017,84 @@ public class XmppConnectionService extends Service {
 	public void setOnConversationListChangedListener(
 			OnConversationUpdate listener) {
 		if (!isScreenOn()) {
-			Log.d(Config.LOGTAG,"ignoring setOnConversationListChangedListener");
+			Log.d(Config.LOGTAG,
+					"ignoring setOnConversationListChangedListener");
 			return;
 		}
-		this.mNotificationService.deactivateGracePeriod();
-		if (checkListeners()) {
-			switchToForeground();
+		synchronized (this.convChangedListenerCount) {
+			if (checkListeners()) {
+				switchToForeground();
+			}
+			this.mOnConversationUpdate = listener;
+			this.mNotificationService.setIsInForeground(true);
+			this.convChangedListenerCount++;
 		}
-		this.mOnConversationUpdate = listener;
-		this.mNotificationService.setIsInForeground(true);
-		this.convChangedListenerCount++;
 	}
 
 	public void removeOnConversationListChangedListener() {
-		this.convChangedListenerCount--;
-		if (this.convChangedListenerCount == 0) {
-			this.mOnConversationUpdate = null;
-			this.mNotificationService.setIsInForeground(false);
-			if (checkListeners()) {
-				switchToBackground();
+		synchronized (this.convChangedListenerCount) {
+			this.convChangedListenerCount--;
+			if (this.convChangedListenerCount <= 0) {
+				this.convChangedListenerCount = 0;
+				this.mOnConversationUpdate = null;
+				this.mNotificationService.setIsInForeground(false);
+				if (checkListeners()) {
+					switchToBackground();
+				}
 			}
 		}
 	}
 
 	public void setOnAccountListChangedListener(OnAccountUpdate listener) {
 		if (!isScreenOn()) {
-			Log.d(Config.LOGTAG,"ignoring setOnAccountListChangedListener");
+			Log.d(Config.LOGTAG, "ignoring setOnAccountListChangedListener");
 			return;
 		}
-		this.mNotificationService.deactivateGracePeriod();
-		if (checkListeners()) {
-			switchToForeground();
+		synchronized (this.accountChangedListenerCount) {
+			if (checkListeners()) {
+				switchToForeground();
+			}
+			this.mOnAccountUpdate = listener;
+			this.accountChangedListenerCount++;
 		}
-		this.mOnAccountUpdate = listener;
-		this.accountChangedListenerCount++;
 	}
 
 	public void removeOnAccountListChangedListener() {
-		this.accountChangedListenerCount--;
-		if (this.accountChangedListenerCount == 0) {
-			this.mOnAccountUpdate = null;
-			if (checkListeners()) {
-				switchToBackground();
+		synchronized (this.accountChangedListenerCount) {
+			this.accountChangedListenerCount--;
+			if (this.accountChangedListenerCount <= 0) {
+				this.mOnAccountUpdate = null;
+				this.accountChangedListenerCount = 0;
+				if (checkListeners()) {
+					switchToBackground();
+				}
 			}
 		}
 	}
 
 	public void setOnRosterUpdateListener(OnRosterUpdate listener) {
 		if (!isScreenOn()) {
-			Log.d(Config.LOGTAG,"ignoring setOnRosterUpdateListener");
+			Log.d(Config.LOGTAG, "ignoring setOnRosterUpdateListener");
 			return;
 		}
-		this.mNotificationService.deactivateGracePeriod();
-		if (checkListeners()) {
-			switchToForeground();
+		synchronized (this.rosterChangedListenerCount) {
+			if (checkListeners()) {
+				switchToForeground();
+			}
+			this.mOnRosterUpdate = listener;
+			this.rosterChangedListenerCount++;
 		}
-		this.mOnRosterUpdate = listener;
-		this.rosterChangedListenerCount++;
 	}
 
 	public void removeOnRosterUpdateListener() {
-		this.rosterChangedListenerCount--;
-		if (this.rosterChangedListenerCount == 0) {
-			this.mOnRosterUpdate = null;
-			if (checkListeners()) {
-				switchToBackground();
+		synchronized (this.rosterChangedListenerCount) {
+			this.rosterChangedListenerCount--;
+			if (this.rosterChangedListenerCount <= 0) {
+				this.rosterChangedListenerCount = 0;
+				this.mOnRosterUpdate = null;
+				if (checkListeners()) {
+					switchToBackground();
+				}
 			}
 		}
 	}
@@ -1056,11 +1110,10 @@ public class XmppConnectionService extends Service {
 				XmppConnection connection = account.getXmppConnection();
 				if (connection != null && connection.getFeatures().csi()) {
 					connection.sendActive();
-					Log.d(Config.LOGTAG, account.getJid()
-							+ " sending csi//active");
 				}
 			}
 		}
+		Log.d(Config.LOGTAG,"app switched into foreground");
 	}
 
 	private void switchToBackground() {
@@ -1069,15 +1122,16 @@ public class XmppConnectionService extends Service {
 				XmppConnection connection = account.getXmppConnection();
 				if (connection != null && connection.getFeatures().csi()) {
 					connection.sendInactive();
-					Log.d(Config.LOGTAG, account.getJid()
-							+ " sending csi//inactive");
 				}
 			}
 		}
+		this.mNotificationService.setIsInForeground(false);
+		Log.d(Config.LOGTAG,"app switched into background");
 	}
-	
+
 	private boolean isScreenOn() {
-		PowerManager pm = (PowerManager) this.getSystemService(Context.POWER_SERVICE);
+		PowerManager pm = (PowerManager) this
+				.getSystemService(Context.POWER_SERVICE);
 		return pm.isScreenOn();
 	}
 
@@ -1216,7 +1270,7 @@ public class XmppConnectionService extends Service {
 			conversation.getMucOptions().setOffline();
 			conversation.deregisterWithBookmark();
 			Log.d(Config.LOGTAG, conversation.getAccount().getJid()
-					+ " leaving muc " + conversation.getContactJid());
+					+ ": leaving muc " + conversation.getContactJid());
 		} else {
 			account.pendingConferenceLeaves.add(conversation);
 		}
@@ -1233,7 +1287,9 @@ public class XmppConnectionService extends Service {
 						if (conversation.getMode() == Conversation.MODE_MULTI) {
 							leaveMuc(conversation);
 						} else {
-							conversation.endOtrIfNeeded();
+							if (conversation.endOtrIfNeeded()) {
+								Log.d(Config.LOGTAG,account.getJid()+": ended otr session with "+conversation.getContactJid());
+							}
 						}
 					}
 				}
@@ -1799,8 +1855,7 @@ public class XmppConnectionService extends Service {
 		ArrayList<Contact> contacts = new ArrayList<Contact>();
 		for (Account account : getAccounts()) {
 			if (!account.isOptionSet(Account.OPTION_DISABLED)) {
-				Contact contact = account.getRoster()
-						.getContactFromRoster(jid);
+				Contact contact = account.getRoster().getContactFromRoster(jid);
 				if (contact != null) {
 					contacts.add(contact);
 				}
@@ -1815,5 +1870,24 @@ public class XmppConnectionService extends Service {
 
 	public HttpConnectionManager getHttpConnectionManager() {
 		return this.mHttpConnectionManager;
+	}
+	
+	private class DeletedDownloadable implements Downloadable {
+
+		@Override
+		public boolean start() {
+			return false;
+		}
+
+		@Override
+		public int getStatus() {
+			return Downloadable.STATUS_DELETED;
+		}
+
+		@Override
+		public long getFileSize() {
+			return 0;
+		}
+		
 	}
 }

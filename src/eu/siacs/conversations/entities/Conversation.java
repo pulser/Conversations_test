@@ -68,11 +68,9 @@ public class Conversation extends AbstractEntity {
 
 	private transient MucOptions mucOptions = null;
 
-	//private transient String latestMarkableMessageId;
+	// private transient String latestMarkableMessageId;
 
 	private byte[] symmetricKey;
-
-	private boolean otrSessionNeedsStarting = false;
 
 	private Bookmark bookmark;
 
@@ -142,8 +140,9 @@ public class Conversation extends AbstractEntity {
 		if (this.messages == null) {
 			return null;
 		}
-		for(int i = this.messages.size() - 1; i >= 0; --i) {
-			if (this.messages.get(i).getStatus() <= Message.STATUS_RECEIVED && this.messages.get(i).markable) {
+		for (int i = this.messages.size() - 1; i >= 0; --i) {
+			if (this.messages.get(i).getStatus() <= Message.STATUS_RECEIVED
+					&& this.messages.get(i).markable) {
 				if (this.messages.get(i).isRead()) {
 					return null;
 				} else {
@@ -263,10 +262,7 @@ public class Conversation extends AbstractEntity {
 			try {
 				if (sendStart) {
 					this.otrSession.startSession();
-					this.otrSessionNeedsStarting = false;
 					return this.otrSession;
-				} else {
-					this.otrSessionNeedsStarting = true;
 				}
 				return this.otrSession;
 			} catch (OtrException e) {
@@ -282,12 +278,12 @@ public class Conversation extends AbstractEntity {
 
 	public void resetOtrSession() {
 		this.otrFingerprint = null;
-		this.otrSessionNeedsStarting = false;
 		this.otrSession = null;
 	}
 
 	public void startOtrIfNeeded() {
-		if (this.otrSession != null && this.otrSessionNeedsStarting) {
+		if (this.otrSession != null
+				&& this.otrSession.getSessionStatus() != SessionStatus.ENCRYPTED) {
 			try {
 				this.otrSession.startSession();
 			} catch (OtrException e) {
@@ -296,18 +292,23 @@ public class Conversation extends AbstractEntity {
 		}
 	}
 
-	public void endOtrIfNeeded() {
+	public boolean endOtrIfNeeded() {
 		if (this.otrSession != null) {
 			if (this.otrSession.getSessionStatus() == SessionStatus.ENCRYPTED) {
 				try {
 					this.otrSession.endSession();
 					this.resetOtrSession();
+					return true;
 				} catch (OtrException e) {
 					this.resetOtrSession();
+					return false;
 				}
 			} else {
 				this.resetOtrSession();
+				return false;
 			}
+		} else {
+			return false;
 		}
 	}
 

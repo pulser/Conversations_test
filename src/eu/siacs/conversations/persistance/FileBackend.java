@@ -34,7 +34,6 @@ import eu.siacs.conversations.R;
 import eu.siacs.conversations.entities.Conversation;
 import eu.siacs.conversations.entities.DownloadableFile;
 import eu.siacs.conversations.entities.Message;
-import eu.siacs.conversations.services.ImageProvider;
 import eu.siacs.conversations.utils.CryptoHelper;
 import eu.siacs.conversations.utils.UIHelper;
 import eu.siacs.conversations.xmpp.pep.Avatar;
@@ -66,37 +65,14 @@ public class FileBackend {
 		return thumbnailCache;
 	}
 
-	public DownloadableFile getJingleFileLegacy(Message message) {
-		return getJingleFileLegacy(message, true);
+	public DownloadableFile getFile(Message message) {
+		return getFile(message, true);
 	}
 
-	public DownloadableFile getJingleFileLegacy(Message message, boolean decrypted) {
-		Conversation conversation = message.getConversation();
-		String prefix = context.getFilesDir().getAbsolutePath();
-		String path = prefix + "/" + conversation.getAccount().getJid() + "/"
-				+ conversation.getContactJid();
-		String filename;
-		if ((decrypted) || (message.getEncryption() == Message.ENCRYPTION_NONE)) {
-			filename = message.getUuid() + ".webp";
-		} else {
-			if (message.getEncryption() == Message.ENCRYPTION_OTR) {
-				filename = message.getUuid() + ".webp";
-			} else {
-				filename = message.getUuid() + ".webp.pgp";
-			}
-		}
-		return new DownloadableFile(path + "/" + filename);
-	}
-
-	public DownloadableFile getJingleFile(Message message) {
-		return getConversationsFile(message, true);
-	}
-
-	public DownloadableFile getConversationsFile(Message message, boolean decrypted) {
+	public DownloadableFile getFile(Message message,
+			boolean decrypted) {
 		StringBuilder filename = new StringBuilder();
-		filename.append(Environment.getExternalStoragePublicDirectory(
-				Environment.DIRECTORY_PICTURES).getAbsolutePath());
-		filename.append("/Conversations/");
+		filename.append(getConversationsDirectory());
 		filename.append(message.getUuid());
 		if ((decrypted) || (message.getEncryption() == Message.ENCRYPTION_NONE)) {
 			filename.append(".webp");
@@ -108,6 +84,11 @@ public class FileBackend {
 			}
 		}
 		return new DownloadableFile(filename.toString());
+	}
+	
+	public static String getConversationsDirectory() {
+		return Environment.getExternalStoragePublicDirectory(
+				Environment.DIRECTORY_PICTURES).getAbsolutePath()+"/Conversations/";
 	}
 
 	public Bitmap resize(Bitmap originalBitmap, int size) {
@@ -144,12 +125,12 @@ public class FileBackend {
 		return this.copyImageToPrivateStorage(message, image, 0);
 	}
 
-	private DownloadableFile copyImageToPrivateStorage(Message message, Uri image,
-			int sampleSize) throws ImageCopyException {
+	private DownloadableFile copyImageToPrivateStorage(Message message,
+			Uri image, int sampleSize) throws ImageCopyException {
 		try {
 			InputStream is = context.getContentResolver()
 					.openInputStream(image);
-			DownloadableFile file = getJingleFile(message);
+			DownloadableFile file = getFile(message);
 			file.getParentFile().mkdirs();
 			file.createNewFile();
 			Bitmap originalBitmap;
@@ -238,7 +219,7 @@ public class FileBackend {
 	}
 
 	public Bitmap getImageFromMessage(Message message) {
-		return BitmapFactory.decodeFile(getJingleFile(message)
+		return BitmapFactory.decodeFile(getFile(message)
 				.getAbsolutePath());
 	}
 
@@ -246,10 +227,7 @@ public class FileBackend {
 			throws FileNotFoundException {
 		Bitmap thumbnail = thumbnailCache.get(message.getUuid());
 		if ((thumbnail == null) && (!cacheOnly)) {
-			File file = getJingleFile(message);
-			if (!file.exists()) {
-				file = getJingleFileLegacy(message);
-			}
+			File file = getFile(message);
 			BitmapFactory.Options options = new BitmapFactory.Options();
 			options.inSampleSize = calcSampleSize(file, size);
 			Bitmap fullsize = BitmapFactory.decodeFile(file.getAbsolutePath(),
@@ -445,12 +423,8 @@ public class FileBackend {
 	}
 
 	public Uri getJingleFileUri(Message message) {
-		File file = getJingleFile(message);
-		if (file.exists()) {
-			return Uri.parse("file://" + file.getAbsolutePath());
-		} else {
-			return ImageProvider.getProviderUri(message);
-		}
+		File file = getFile(message);
+		return Uri.parse("file://" + file.getAbsolutePath());
 	}
 
 	public class ImageCopyException extends Exception {
@@ -473,5 +447,9 @@ public class FileBackend {
 			return null;
 		}
 		return cropCenterSquare(bm, UIHelper.getRealPx(size, context));
+	}
+
+	public boolean isFileAvailable(Message message) {
+		return getFile(message).exists();
 	}
 }

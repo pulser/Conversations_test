@@ -13,13 +13,12 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.PowerManager;
-import android.os.SystemClock;
 import android.support.v4.app.NotificationCompat;
 import android.support.v4.app.TaskStackBuilder;
 import android.text.Html;
 
-import eu.siacs.conversations.Config;
 import eu.siacs.conversations.R;
+import eu.siacs.conversations.entities.Account;
 import eu.siacs.conversations.entities.Conversation;
 import eu.siacs.conversations.entities.Message;
 import eu.siacs.conversations.ui.ConversationActivity;
@@ -34,43 +33,48 @@ public class NotificationService {
 	public int NOTIFICATION_ID = 0x2342;
 	private Conversation mOpenConversation;
 	private boolean mIsInForeground;
-
-	private long mEndGracePeriod = 0L;
-
+	
 	public NotificationService(XmppConnectionService service) {
 		this.mXmppConnectionService = service;
 		this.mNotificationManager = (NotificationManager) service
 				.getSystemService(Context.NOTIFICATION_SERVICE);
 	}
 
-	public synchronized void push(Message message) {
-
+	public void push(Message message) {
 		PowerManager pm = (PowerManager) mXmppConnectionService
 				.getSystemService(Context.POWER_SERVICE);
 		boolean isScreenOn = pm.isScreenOn();
+
 		if (this.mIsInForeground && isScreenOn
 				&& this.mOpenConversation == message.getConversation()) {
 			return;
 		}
-		String conversationUuid = message.getConversationUuid();
-		if (notifications.containsKey(conversationUuid)) {
-			notifications.get(conversationUuid).add(message);
-		} else {
-			ArrayList<Message> mList = new ArrayList<Message>();
-			mList.add(message);
-			notifications.put(conversationUuid, mList);
+		synchronized (notifications) {
+			String conversationUuid = message.getConversationUuid();
+			if (notifications.containsKey(conversationUuid)) {
+				notifications.get(conversationUuid).add(message);
+			} else {
+				ArrayList<Message> mList = new ArrayList<Message>();
+				mList.add(message);
+				notifications.put(conversationUuid, mList);
+			}
 		}
+		Account account = message.getConversation().getAccount();
 		updateNotification((!(this.mIsInForeground && this.mOpenConversation == null) || !isScreenOn)
-				&& !inGracePeriod());
+				&& !account.inGracePeriod());
 	}
 
 	public void clear() {
-		notifications.clear();
+		synchronized (notifications) {
+			notifications.clear();
+		}
 		updateNotification(false);
 	}
 
 	public void clear(Conversation conversation) {
-		notifications.remove(conversation.getUuid());
+		synchronized (notifications) {
+			notifications.remove(conversation.getUuid());
+		}
 		updateNotification(false);
 	}
 
@@ -171,9 +175,7 @@ public class NotificationService {
 				}
 			}
 			mBuilder.setDeleteIntent(createDeleteIntent());
-			if (!inGracePeriod()) {
-				mBuilder.setLights(0xffffffff, 2000, 4000);
-			}
+			mBuilder.setLights(0xffffffff, 2000, 4000);
 			Notification notification = mBuilder.build();
 			mNotificationManager.notify(NOTIFICATION_ID, notification);
 		}
@@ -231,18 +233,5 @@ public class NotificationService {
 
 	public void setIsInForeground(boolean foreground) {
 		this.mIsInForeground = foreground;
-	}
-
-	public void activateGracePeriod() {
-		this.mEndGracePeriod = SystemClock.elapsedRealtime()
-				+ (Config.CARBON_GRACE_PERIOD * 1000);
-	}
-
-	public void deactivateGracePeriod() {
-		this.mEndGracePeriod = 0L;
-	}
-
-	private boolean inGracePeriod() {
-		return SystemClock.elapsedRealtime() < this.mEndGracePeriod;
 	}
 }

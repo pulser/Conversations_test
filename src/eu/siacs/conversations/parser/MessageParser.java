@@ -417,8 +417,7 @@ public class MessageParser extends AbstractParser implements
 				message = this.parseCarbonMessage(packet, account);
 				if (message != null) {
 					if (message.getStatus() == Message.STATUS_SEND) {
-						mXmppConnectionService.getNotificationService()
-								.activateGracePeriod();
+						account.activateGracePeriod();
 						notify = false;
 						mXmppConnectionService.markRead(
 								message.getConversation(), false);
@@ -440,8 +439,7 @@ public class MessageParser extends AbstractParser implements
 				} else {
 					mXmppConnectionService.markRead(message.getConversation(),
 							false);
-					mXmppConnectionService.getNotificationService()
-							.activateGracePeriod();
+					account.activateGracePeriod();
 					notify = false;
 				}
 			}
@@ -478,8 +476,9 @@ public class MessageParser extends AbstractParser implements
 				mXmppConnectionService.databaseBackend.createMessage(message);
 			}
 		}
-		if (message.getStatus() == Message.STATUS_RECEIVED && message.bodyContainsDownloadable()) {
-			this.mXmppConnectionService.getHttpConnectionManager().createNewConnection(message);
+		if (message.bodyContainsDownloadable()) {
+			this.mXmppConnectionService.getHttpConnectionManager()
+					.createNewConnection(message);
 		}
 		notify = notify && !conversation.isMuted();
 		if (notify) {

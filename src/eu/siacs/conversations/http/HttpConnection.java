@@ -9,8 +9,12 @@ import java.net.URL;
 
 import javax.net.ssl.HttpsURLConnection;
 
+import android.content.Intent;
 import android.graphics.BitmapFactory;
+import android.net.Uri;
+import android.util.Log;
 
+import eu.siacs.conversations.Config;
 import eu.siacs.conversations.entities.Downloadable;
 import eu.siacs.conversations.entities.DownloadableFile;
 import eu.siacs.conversations.entities.Message;
@@ -24,7 +28,8 @@ public class HttpConnection implements Downloadable {
 	private URL mUrl;
 	private Message message;
 	private DownloadableFile file;
-	private long mPreviousFileSize = Long.MIN_VALUE;
+	private int mStatus = Downloadable.STATUS_UNKNOWN;
+	private boolean mAutostart = true;
 
 	public HttpConnection(HttpConnectionManager manager) {
 		this.mHttpConnectionManager = manager;
@@ -32,8 +37,14 @@ public class HttpConnection implements Downloadable {
 	}
 
 	@Override
-	public void start() {
-		new Thread(new FileDownloader()).start();
+	public boolean start() {
+		if (mXmppConnectionService.hasInternetConnection()) {
+			changeStatus(STATUS_DOWNLOADING);
+			new Thread(new FileDownloader()).start();
+			return true;
+		} else {
+			return false;
+		}
 	}
 
 	public void init(Message message) {
@@ -41,41 +52,37 @@ public class HttpConnection implements Downloadable {
 		this.message.setDownloadable(this);
 		try {
 			mUrl = new URL(message.getBody());
-			this.file = mXmppConnectionService.getFileBackend().getConversationsFile(message,false);
-			message.setType(Message.TYPE_IMAGE);
-			message.setStatus(Message.STATUS_RECEIVED_CHECKING);
-			mXmppConnectionService.updateConversationUi();
+			this.file = mXmppConnectionService.getFileBackend()
+					.getFile(message, false);
+			this.mAutostart = true;
 			checkFileSize();
 		} catch (MalformedURLException e) {
 			this.cancel();
 		}
 	}
-	
-	public void init(Message message, URL url) {
-		this.message = message;
-		this.message.setDownloadable(this);
-		this.mUrl = url;
-		this.file = mXmppConnectionService.getFileBackend().getConversationsFile(message,false);
-		this.mPreviousFileSize = message.getImageParams().size;
-		message.setType(Message.TYPE_IMAGE);
-		message.setStatus(Message.STATUS_RECEIVED_CHECKING);
-		mXmppConnectionService.updateConversationUi();
-		checkFileSize();
-	}
-	
+
 	private void checkFileSize() {
+		changeStatus(STATUS_CHECKING);
 		new Thread(new FileSizeChecker()).start();
 	}
 
 	public void cancel() {
-		mXmppConnectionService.markMessage(message, Message.STATUS_RECEPTION_FAILED);
+		mHttpConnectionManager.finishConnection(this);
+		message.setDownloadable(null);
+		mXmppConnectionService.updateConversationUi();
+	}
+
+	private void finish() {
+		Intent intent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+		intent.setData(Uri.fromFile(file));
+		mXmppConnectionService.sendBroadcast(intent);
+		message.setDownloadable(null);
 		mHttpConnectionManager.finishConnection(this);
 	}
-	
-	private void finish() {
-		message.setStatus(Message.STATUS_RECEIVED);
-		mXmppConnectionService.updateMessage(message);
-		mHttpConnectionManager.finishConnection(this);
+
+	private void changeStatus(int status) {
+		this.mStatus = status;
+		mXmppConnectionService.updateConversationUi();
 	}
 
 	private class FileSizeChecker implements Runnable {
@@ -90,21 +97,19 @@ public class HttpConnection implements Downloadable {
 				return;
 			}
 			file.setExpectedSize(size);
-			message.setBody(mUrl.toString()+","+String.valueOf(size));
-			if (size <= mHttpConnectionManager.getAutoAcceptFileSize() || size == mPreviousFileSize) {
-				mXmppConnectionService.updateMessage(message);
+			if (size <= mHttpConnectionManager.getAutoAcceptFileSize() && mAutostart) {
 				start();
 			} else {
-				message.setStatus(Message.STATUS_RECEIVED_OFFER);
-				mXmppConnectionService.updateMessage(message);
+				changeStatus(STATUS_OFFER);
 			}
 		}
 
 		private long retrieveFileSize() throws IOException {
-			HttpURLConnection connection = (HttpURLConnection) mUrl.openConnection();
+			HttpURLConnection connection = (HttpURLConnection) mUrl
+					.openConnection();
 			connection.setRequestMethod("HEAD");
 			if (connection instanceof HttpsURLConnection) {
-				
+
 			}
 			String contentLength = connection.getHeaderField("Content-Length");
 			if (contentLength == null) {
@@ -118,13 +123,12 @@ public class HttpConnection implements Downloadable {
 		}
 
 	}
-	
+
 	private class FileDownloader implements Runnable {
 
 		@Override
 		public void run() {
 			try {
-				mXmppConnectionService.markMessage(message, Message.STATUS_RECEIVING);
 				download();
 				updateImageBounds();
 				finish();
@@ -132,13 +136,15 @@ public class HttpConnection implements Downloadable {
 				cancel();
 			}
 		}
-		
+
 		private void download() throws IOException {
-			HttpURLConnection connection = (HttpURLConnection) mUrl.openConnection();
+			HttpURLConnection connection = (HttpURLConnection) mUrl
+					.openConnection();
 			if (connection instanceof HttpsURLConnection) {
-				
+
 			}
-			BufferedInputStream is = new BufferedInputStream(connection.getInputStream());
+			BufferedInputStream is = new BufferedInputStream(
+					connection.getInputStream());
 			OutputStream os = file.createOutputStream();
 			int count = -1;
 			byte[] buffer = new byte[1024];
@@ -149,17 +155,32 @@ public class HttpConnection implements Downloadable {
 			os.close();
 			is.close();
 		}
-		
+
 		private void updateImageBounds() {
 			BitmapFactory.Options options = new BitmapFactory.Options();
 			options.inJustDecodeBounds = true;
 			BitmapFactory.decodeFile(file.getAbsolutePath(), options);
 			int imageHeight = options.outHeight;
 			int imageWidth = options.outWidth;
-			message.setBody(mUrl.toString()+","+file.getSize() + ','
+			message.setBody(mUrl.toString() + "," + file.getSize() + ','
 					+ imageWidth + ',' + imageHeight);
-			
+			message.setType(Message.TYPE_IMAGE);
+			mXmppConnectionService.updateMessage(message);
 		}
-		
+
+	}
+
+	@Override
+	public int getStatus() {
+		return this.mStatus;
+	}
+
+	@Override
+	public long getFileSize() {
+		if (this.file != null) {
+			return this.file.getExpectedSize();
+		} else {
+			return 0;
+		}
 	}
 }

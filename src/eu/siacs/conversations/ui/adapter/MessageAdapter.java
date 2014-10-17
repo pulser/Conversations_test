@@ -1,7 +1,5 @@
 package eu.siacs.conversations.ui.adapter;
 
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.util.HashMap;
 import java.util.List;
 
@@ -104,7 +102,8 @@ public class MessageAdapter extends ArrayAdapter<Message> {
 		}
 		boolean multiReceived = message.getConversation().getMode() == Conversation.MODE_MULTI
 				&& message.getMergedStatus() <= Message.STATUS_RECEIVED;
-		if (message.getType() == Message.TYPE_IMAGE) {
+		if (message.getType() == Message.TYPE_IMAGE
+				|| message.getDownloadable() != null) {
 			ImageParams params = message.getImageParams();
 			if (params.size != 0) {
 				filesize = params.size / 1024 + " KB";
@@ -136,10 +135,6 @@ public class MessageAdapter extends ArrayAdapter<Message> {
 			break;
 		case Message.STATUS_SEND_REJECTED:
 			info = getContext().getString(R.string.send_rejected);
-			error = true;
-			break;
-		case Message.STATUS_RECEPTION_FAILED:
-			info = getContext().getString(R.string.reception_failed);
 			error = true;
 			break;
 		default:
@@ -230,19 +225,10 @@ public class MessageAdapter extends ArrayAdapter<Message> {
 		viewHolder.messageBody.setVisibility(View.VISIBLE);
 		if (message.getBody() != null) {
 			if (message.getType() != Message.TYPE_PRIVATE) {
-				if (message.getType() == Message.TYPE_IMAGE) {
-					String orign = message.getImageParams().origin;
-					if (orign!=null) {
-						viewHolder.messageBody.setText(orign);
-					} else {
-						viewHolder.messageBody.setText(message.getBody());
-					}
-				} else {
-					String body = Config.PARSE_EMOTICONS ? UIHelper
-							.transformAsciiEmoticons(message.getMergedBody())
-							: message.getMergedBody();
-					viewHolder.messageBody.setText(body);
-				}
+				String body = Config.PARSE_EMOTICONS ? UIHelper
+						.transformAsciiEmoticons(message.getMergedBody())
+						: message.getMergedBody();
+				viewHolder.messageBody.setText(body);
 			} else {
 				String privateMarker;
 				if (message.getStatus() <= Message.STATUS_RECEIVED) {
@@ -275,6 +261,20 @@ public class MessageAdapter extends ArrayAdapter<Message> {
 		viewHolder.messageBody.setTextColor(activity.getPrimaryTextColor());
 		viewHolder.messageBody.setTypeface(null, Typeface.NORMAL);
 		viewHolder.messageBody.setTextIsSelectable(true);
+	}
+
+	private void displayDownloadableMessage(ViewHolder viewHolder,
+			final Message message) {
+		viewHolder.image.setVisibility(View.GONE);
+		viewHolder.messageBody.setVisibility(View.GONE);
+		viewHolder.download_button.setVisibility(View.VISIBLE);
+		viewHolder.download_button.setOnClickListener(new OnClickListener() {
+
+			@Override
+			public void onClick(View v) {
+				startDonwloadable(message);
+			}
+		});
 	}
 
 	private void displayImageMessage(ViewHolder viewHolder,
@@ -347,6 +347,8 @@ public class MessageAdapter extends ArrayAdapter<Message> {
 				viewHolder.contact_picture = (ImageView) view
 						.findViewById(R.id.message_photo);
 				viewHolder.contact_picture.setImageBitmap(getSelfBitmap());
+				viewHolder.download_button = (Button) view
+						.findViewById(R.id.download_button);
 				viewHolder.indicator = (ImageView) view
 						.findViewById(R.id.security_indicator);
 				viewHolder.image = (ImageView) view
@@ -366,15 +368,11 @@ public class MessageAdapter extends ArrayAdapter<Message> {
 						.findViewById(R.id.message_box);
 				viewHolder.contact_picture = (ImageView) view
 						.findViewById(R.id.message_photo);
-
 				viewHolder.download_button = (Button) view
 						.findViewById(R.id.download_button);
-
 				if (item.getConversation().getMode() == Conversation.MODE_SINGLE) {
-
 					viewHolder.contact_picture.setImageBitmap(mBitmapCache.get(
 							item.getConversation().getContact(), getContext()));
-
 				}
 				viewHolder.indicator = (ImageView) view
 						.findViewById(R.id.security_indicator);
@@ -483,29 +481,19 @@ public class MessageAdapter extends ArrayAdapter<Message> {
 			}
 		}
 
-		if (item.getType() == Message.TYPE_IMAGE) {
-			if (item.getStatus() == Message.STATUS_RECEIVING) {
+		if (item.getType() == Message.TYPE_IMAGE
+				|| item.getDownloadable() != null) {
+			Downloadable d = item.getDownloadable();
+			if (d != null && d.getStatus() == Downloadable.STATUS_DOWNLOADING) {
 				displayInfoMessage(viewHolder, R.string.receiving_image);
-			} else if (item.getStatus() == Message.STATUS_RECEIVED_CHECKING) {
+			} else if (d != null
+					&& d.getStatus() == Downloadable.STATUS_CHECKING) {
 				displayInfoMessage(viewHolder, R.string.checking_image);
-			} else if (item.getStatus() == Message.STATUS_RECEPTION_FAILED) {
-				displayTextMessage(viewHolder, item);
-			} else if (item.getStatus() == Message.STATUS_RECEIVED_OFFER) {
-				viewHolder.image.setVisibility(View.GONE);
-				viewHolder.messageBody.setVisibility(View.GONE);
-				viewHolder.download_button.setVisibility(View.VISIBLE);
-				viewHolder.download_button
-						.setOnClickListener(new OnClickListener() {
-
-							@Override
-							public void onClick(View v) {
-								if (!startDonwloadable(item)) {
-									activity.xmppConnectionService.markMessage(
-											item,
-											Message.STATUS_RECEPTION_FAILED);
-								}
-							}
-						});
+			} else if (d != null
+					&& d.getStatus() == Downloadable.STATUS_DELETED) {
+				displayInfoMessage(viewHolder, R.string.image_file_deleted);
+			} else if (d != null && d.getStatus() == Downloadable.STATUS_OFFER) {
+				displayDownloadableMessage(viewHolder, item);
 			} else if ((item.getEncryption() == Message.ENCRYPTION_DECRYPTED)
 					|| (item.getEncryption() == Message.ENCRYPTION_NONE)
 					|| (item.getEncryption() == Message.ENCRYPTION_OTR)) {
@@ -543,24 +531,12 @@ public class MessageAdapter extends ArrayAdapter<Message> {
 		return view;
 	}
 
-	public boolean startDonwloadable(Message message) {
+	public void startDonwloadable(Message message) {
 		Downloadable downloadable = message.getDownloadable();
 		if (downloadable != null) {
-			downloadable.start();
-			return true;
-		} else {
-			ImageParams params = message.getImageParams();
-			if (params.origin != null) {
-				try {
-					URL url = new URL(params.origin);
-					activity.xmppConnectionService.getHttpConnectionManager()
-							.createNewConnection(message, url);
-					return true;
-				} catch (MalformedURLException e) {
-					return false;
-				}
-			} else {
-				return false;
+			if (!downloadable.start()) {
+				Toast.makeText(activity, R.string.not_connected_try_again,
+						Toast.LENGTH_SHORT).show();
 			}
 		}
 	}
